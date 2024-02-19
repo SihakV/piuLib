@@ -1,150 +1,82 @@
 
-const { Op} =require('sequelize')
-const { jwtconfig } = require('../config/config')
+const { Op } = require('sequelize');
+const { jwtconfig } = require('../config/config');
 
+const db = require('../model');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const Students = db.student;
+const refreshtoken = [];
 
-const db = require('../model')
-const jwt = require('jsonwebtoken')
-const bcrypt = require('bcrypt')
-const Students = db.student
-const refreshtoken = []
 export const getroles = async () => {
-    const allrole = await db.role.findAll()
+    const allrole = await db.role.findAll();
     const roles = {
-        librarian:  allrole.find(({role}) => role === 'librarian'),
-        student:  allrole.find(({role}) => role === 'student'),
-        headdepartment:  allrole.find(({role}) => role === 'headdepartment')
-    
-} 
-    return roles
-}
-export const login = (req , res) => {
-    const {email,password} = req.body
+        librarian: allrole.find(({ role }) => role === 'librarian'),
+        student: allrole.find(({ role }) => role === 'student'),
+        headdepartment: allrole.find(({ role }) => role === 'headdepartment')
+    };
+    return roles;
+};
+export const login = async (req, res) => {
+    const { email, password } = req.body;
+
     const generateToken = (user) => {
-        
-        const accessToken = jwt.sign( {role: user.role_id , email: user.email} , jwtconfig.secret, {expiresIn:"7d"})
-        const refreshToken = jwt.sign( {role: user.role_id , email: user.email}  , jwtconfig.secret , {expiresIn:"14d"})
-        refreshtoken.push(refreshToken)
-        return {accessToken , refreshToken}
-    }
-    
-   Students.findOne(({
-    where :{
-        [Op.or]: {
-            email: email,
-            studentID: email
-        }},
-    include: [
-        db.role
-    ]
-   })).then(async response => {
-    if(response) {
-    const isMatch = await bcrypt.compare(password,response.password)
-    if(isMatch) {
-        const token =  generateToken(response)
-        
-        return res.status(200).json({user: {
-            id: response.id,
-            firstname: response.firstname,
-            lastname: response.lastname,
-            email: response.email,
-            department: response.department,
-            ID: response.studentID,
-            role: response.role.role,
-            phonenumber: response.phone_number
+        const accessToken = jwt.sign({ role: user.role_id, email: user.email }, jwtconfig.secret, { expiresIn: "7d" });
+        const refreshToken = jwt.sign({ role: user.role_id, email: user.email }, jwtconfig.secret, { expiresIn: "14d" });
+        refreshtoken.push(refreshToken); // Ensure refreshtoken array is appropriately managed elsewhere
+        return { accessToken, refreshToken };
+    };
 
-        } , token : {accessToken:token.accessToken , refreshToken:token.refreshToken }})
-    } else {
-        return res.status(500).json({message: "Incorrect Credential"})
-      
-    }
-    } else {
-        {
-            db.headdepartment.findOne((
-                {
-                    where: {
-                        [Op.or]: {
-                            email: email ,
-                            ID:email
-                        }
-                    },
-                    include:[
-                        db.role
-                    ]
-                    
-                }
-            )).then(async response => {
-                if(response) {
-                    const isMatch = await bcrypt.compare(password , response.password)
-                if(isMatch) {
-                    const token = generateToken(response)
-        
-                    return res.status(200).json({
-                        user: {
-                            firstname: response.firstname,
-                            lastname: response.lastname,
-                            department: response.department,
-                            email: response.email,
-                            ID: response.ID,
-                            role: response.role.role,
-                            phonenumber: response.phone_number
-                        },
-                        token: {
-                            accessToken: token.accessToken,
-                            refreshToken: token.refreshToken
-                        }
-                    })
-                } 
-                else {
-                    res.status(401).json({message: "Incorrect Credential"})
-                }
+    const authenticateUser = async (model, email, password) => {
+        const user = await model.findOne({
+            where: {
+                [Op.or]: [
+                    { email: email },
+                    { studentID: email },
+                    { ID: email },
+                    { cardID: email }
+                ]
+            },
+            include: [db.role]
+        });
 
-                } else {
-                    db.librarian.findOne({
-                        where: {
-                            [Op.or] : {
-                                email:email ,
-                                cardID: email
-                            }
-                        },
-                        include : [db.role]
-                       }).then( async (response) => {
-                        if(response) {
-                            const isMatch = await bcrypt.compare(password , response.password)
-                            if(isMatch) {
-                                const token = generateToken(response)
-                            return res.status(200).json({
-                                user: {
-                                    fullname: response.fullname,
-                                    ID: response.cardID,
-                                    role: response.role.role,
-                                    email: response.email,
-                                    id: response.id,
-                                  
-                                } ,
-                                token: {
-                                accessToken: token.accessToken,
-                                refreshToken: token.refreshToken                            }
-                            })
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            return null; // Null indicates either no user found or password mismatch
+        }
 
-                            } else res.status(401).json({message: "Incorrect Credential"})
-                            
-                        } else {
-                            return res.status(401).json({message: "Incorrect Credential"})
-                        }
-                       })
-                       
-                }
-                
-            }).catch(err => res.status(500).json({message: "Opps! Something Wrong"}))
-           }
+        return user;
+    };
 
+    const respondWithToken = (user) => {
+        const token = generateToken(user);
+        return res.status(200).json({
+            user: {
+                id: user.id,
+                firstname: user.firstname,
+                lastname: user.lastname,
+                email: user.email,
+                department: user.department,
+                ID: user.studentID || user.ID || user.cardID,
+                role: user.role.role,
+                phonenumber: user.phone_number
+            },
+            token: token
+        });
+    };
+
+    // Models to attempt authentication with
+    const models = [Students, db.headdepartment, db.librarian];
+    for (const model of models) {
+        const user = await authenticateUser(model, email, password);
+        if (user) {
+            return respondWithToken(user);
+        }
     }
 
-   })
+    // If execution reaches here, authentication failed across all models
+    return res.status(401).json({ message: "Incorrect Credential" });
+};
 
-
-}
 export const refreshToken = (req , res) => {
     const {refreshToken} = req.body
     if(!refreshtoken.includes(refreshToken)) {
