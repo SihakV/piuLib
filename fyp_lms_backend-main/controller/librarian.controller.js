@@ -225,60 +225,54 @@ export const resetPassword = async (req, res) => {
     const { email } = req.body;
 
     try {
-        const student = await db.student.findOne({
+        const user = await db.student.findOne({
             where: {
-                [Op.or]: {
-                    email: email,
-                    studentID: email
-                },
+                [Op.or]: [
+                    { email },
+                    { studentID: email }
+                ]
+            }
+        }) || await db.headdepartment.findOne({
+            where: {
+                [Op.or]: [
+                    { email },
+                    { ID: email }
+                ]
+            }
+        }) || await db.librarian.findOne({
+            where: {
+                [Op.or]: [
+                    { email },
+                    { cardID: email }
+                ]
             }
         });
-        const librarian = await db.librarian.findOne({
-            where: {
-                [Op.or]: {
-                    email: email,
-                    cardID: email
-                },
 
-            }
-        })
-        const headdepartment = await db.headdepartment.findOne({
-            where: {
-                [Op.or]: {
-                    email: email,
-                    ID: email
-                },
-
-            }
-            
-        })
-
-        if (!student && !headdepartment && !librarian) {
+        if (!user) {
             return res.status(401).json({ message: "User Not Found" });
         }
-    
 
         const password = await hashedpassword();
-        const updatedStudent = await (student ? db.student : headdepartment ? db.headdepartment : db.librarian).update(
+        const updatedUser = await user.update(
             { password: password.hashedPassword },
             {
                 where: {
-                    [Op.or]: {
-                        email: email,
-                        [student ? `studentID` : headdepartment ? 'ID' : 'cardID']: email
-                    },
+                    [Op.or]: [
+                        { email },
+                        { [user instanceof db.student ? 'studentID' : user instanceof db.headdepartment ? 'ID' : 'cardID']: email }
+                    ]
                 }
             }
         );
 
-        if (updatedStudent[0] === 0) {
+        if (updatedUser[0] === 0) {
             return res.status(500).json({ message: "Error Occurred" });
         }
 
-        handleresetemail({ email : (student ? student.email : headdepartment ? headdepartment.email : librarian.email), password: password.password });
+        handleresetemail({ email: user.email, password: password.password });
         return res.status(200).json({ message: "Reset Successfully" });
     } catch (error) {
-        console.log(error)
+        console.log(error);
         return res.status(500).json({ message: "Error Occurred" });
     }
 };
@@ -319,29 +313,24 @@ export const editstudent = async (req, res) => {
     try {
         const { id, oldpwd, newpwd } = req.body;
 
-        const student = await db.student.findOne({ where: { studentID: id } });
-        if (student) {
-            const isMatch = await bcrypt.compare(oldpwd, student.password);
-            if (isMatch) {
-                const salt = await bcrypt.genSalt(10);
-                const hashedpwd = await bcrypt.hash(newpwd, salt);
-                await db.student.update({ password: hashedpwd }, { where: { studentID: id } });
-                return res.status(200).json({ message: 'Password Changed' });
-            } else {
-                return res.status(403).json({ message: 'Wrong Password' });
-            }
-        } else {
-            const headDepartment = await db.headdepartment.findOne({ where: { ID: id } });
-            if (headDepartment) {
-                const isMatch = await bcrypt.compare(oldpwd, headDepartment.password);
+        const updatePassword = async (model, field, id) => {
+            const user = await model.findOne({ where: { [field]: id } });
+            if (user) {
+                const isMatch = await bcrypt.compare(oldpwd, user.password);
                 if (isMatch) {
                     const salt = await bcrypt.genSalt(10);
                     const hashedpwd = await bcrypt.hash(newpwd, salt);
-                    await db.headdepartment.update({ password: hashedpwd }, { where: { ID: id } });
+                    await model.update({ password: hashedpwd }, { where: { [field]: id } });
                     return res.status(200).json({ message: 'Password Changed' });
+                } else {
+                    return res.status(403).json({ message: 'Wrong Password' });
                 }
             }
-        }
+        };
+
+        await updatePassword(db.student, 'studentID', id);
+        await updatePassword(db.headdepartment, 'ID', id);
+
         return res.status(404).json({ message: 'User not found' });
     } catch (error) {
         console.error('Error editing student:', error);
@@ -349,107 +338,79 @@ export const editstudent = async (req, res) => {
     }
 };
 
-export const editlibrarian = (req, res) => {
-    const { id, oldpwd, newpwd, fullname, ID } = req.body;
-    db.librarian
-        .findOne({
-            where: {
-                id: id
-            }
-        })
-        .then(async (response) => {
-            if (response) {
-                if (newpwd !== '' && fullname === '' && ID === '') {
-                    const isMatch = await bcrypt.compare(oldpwd, response.password);
-                    if (isMatch) {
-                        const salt = await bcrypt.genSalt(10);
-                        const hashedpwd = await bcrypt.hash(newpwd, salt);
-                        await db.librarian.update({ password: hashedpwd }, { where: { id: id } });
-                        return res.sendStatus(200);
-                    }
-                } else if (fullname !== '' && newpwd === '' && ID === '') {
+export const editlibrarian = async (req, res) => {
+    try {
+        const { id, oldpwd, newpwd, fullname, ID } = req.body;
+        const librarian = await db.librarian.findOne({ where: { id: id } });
+
+        if (librarian) {
+            if (newpwd !== '' && fullname === '' && ID === '') {
+                // Update librarian password
+                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
+                if (isMatch) {
+                    const salt = await bcrypt.genSalt(10);
+                    const hashedpwd = await bcrypt.hash(newpwd, salt);
+                    await db.librarian.update({ password: hashedpwd }, { where: { id: id } });
+                    return res.sendStatus(200);
+                }
+            } else if (fullname !== '' && newpwd === '' && ID === '') {
+                // Update librarian fullname
+                await db.librarian.update({ fullname: fullname }, { where: { id: id } });
+                return res.sendStatus(200);
+            } else if (fullname !== '' && newpwd !== '' && ID !== '') {
+                // Update librarian password, fullname, and cardID
+                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
+                if (isMatch) {
+                    const salt = await bcrypt.genSalt(10);
+                    const hashedpwd = await bcrypt.hash(newpwd, salt);
                     await db.librarian.update(
-                        { fullname: fullname },
-                        {
-                            where: {
-                                id: id
-                            }
-                        }
+                        { password: hashedpwd, fullname: fullname, cardID: ID },
+                        { where: { id: id } }
                     );
                     return res.sendStatus(200);
-                } else if (fullname !== '' && newpwd !== '' && ID !== '') {
-                    const isMatch = await bcrypt.compare(oldpwd, response.password);
-                    if (isMatch) {
-                        const salt = await bcrypt.genSalt(10);
-                        const hashedpwd = await bcrypt.hash(newpwd, salt);
-                        await db.librarian.update(
-                            { password: hashedpwd, fullname: fullname, cardID: ID },
-                            {
-                                where: {
-                                    id: id
-                                }
-                            }
-                        );
-                        return res.sendStatus(200);
-                    }
-                } else if (fullname === '' && newpwd === '' && ID !== '') {
+                }
+            } else if (fullname === '' && newpwd === '' && ID !== '') {
+                // Update librarian cardID
+                await db.librarian.update({ cardID: ID }, { where: { id: id } });
+                return res.sendStatus(200);
+            } else if (fullname !== '' && ID !== '' && newpwd === '') {
+                // Update librarian fullname and cardID
+                await db.librarian.update({ fullname: fullname, cardID: ID }, { where: { id: id } });
+                return res.sendStatus(200);
+            } else if (fullname !== '' && ID === '' && newpwd !== '') {
+                // Update librarian password and fullname
+                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
+                if (isMatch) {
+                    const salt = await bcrypt.genSalt(10);
+                    const hashedpwd = await bcrypt.hash(newpwd, salt);
                     await db.librarian.update(
-                        { cardID: ID },
-                        {
-                            where: {
-                                id: id
-                            }
-                        }
+                        { password: hashedpwd, fullname: fullname },
+                        { where: { id: id } }
                     );
                     return res.sendStatus(200);
-                } else if (fullname !== '' && ID !== '' && newpwd === '') {
+                }
+            } else if (fullname === '' && ID !== '' && newpwd !== '') {
+                // Update librarian password and cardID
+                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
+                if (isMatch) {
+                    const salt = await bcrypt.genSalt(10);
+                    const hashedpwd = await bcrypt.hash(newpwd, salt);
                     await db.librarian.update(
-                        { fullname: fullname, cardID: ID },
-                        {
-                            where: {
-                                id: id
-                            }
-                        }
+                        { password: hashedpwd, cardID: ID },
+                        { where: { id: id } }
                     );
                     return res.sendStatus(200);
-                } else if (fullname !== '' && ID === '' && newpwd !== '') {
-                    const isMatch = await bcrypt.compare(oldpwd, response.password);
-                    if (isMatch) {
-                        const salt = await bcrypt.genSalt(10);
-                        const hashedpwd = await bcrypt.hash(newpwd, salt);
-                        await db.librarian.update(
-                            { password: hashedpwd, fullname: fullname },
-                            {
-                                where: {
-                                    id: id
-                                }
-                            }
-                        );
-                        return res.sendStatus(200);
-                    }
-                } else if (fullname === '' && ID !== '' && newpwd !== '') {
-                    const isMatch = await bcrypt.compare(oldpwd, response.password);
-                    if (isMatch) {
-                        const salt = await bcrypt.genSalt(10);
-                        const hashedpwd = await bcrypt.hash(newpwd, salt);
-                        await db.librarian.update(
-                            { password: hashedpwd, cardID: ID },
-                            {
-                                where: {
-                                    id: id
-                                }
-                            }
-                        );
-                        return res.sendStatus(200);
-                    }
-                } else {
-                    return res.sendStatus(400);
                 }
             } else {
-                return res.sendStatus(500);
+                return res.sendStatus(400);
             }
-        })
-        .catch(() => res.sendStatus(500));
+        } else {
+            return res.sendStatus(500);
+        }
+    } catch (error) {
+        console.error('Error editing librarian:', error);
+        return res.sendStatus(500);
+    }
 };
 export const register_HD = async (req, res) => {
     const { firstname, lastname, ID, department, phone_number, email } = req.body;
@@ -661,7 +622,6 @@ export const pickupandreturnbook = async (req, res) => {
                     borrow_date: new Date(),
                     expect_return_date: nextWeek,
                     qrcode: ''
-
                 },
                 {
                     where: {
@@ -693,12 +653,13 @@ export const pickupandreturnbook = async (req, res) => {
             });
 
             if (response.length > 0) {
-                
                 await Promise.all(
                     response.map(async (data) => {
+                        const status = data.expect_return_date < date ? `returned ${lateday(date, data.expect_return_date)} days late` : 'returned';
+
                         await db.borrow_book.update(
                             {
-                                status: data.expect_return_date < date ? `returned ${lateday(date, data.expect_return_date)} days late` : 'returned',
+                                status: status,
                                 return_date: new Date(),
                                 qrcode: ''
                             },
@@ -708,11 +669,11 @@ export const pickupandreturnbook = async (req, res) => {
                         );
 
                         await Promise.all(
-                            data.Books.map(async (i) => {
+                            data.Books.map(async (book) => {
                                 await db.book.update(
                                     { status: 'available' },
                                     {
-                                        where: { title: i.title }
+                                        where: { title: book.title }
                                     }
                                 );
                             })
@@ -733,51 +694,46 @@ export const pickupandreturnbook = async (req, res) => {
 };
 export const handleIndividualReturn = async (req, res) => {
     const { borrowbooked } = req.body;
-    
-    try {
-      const borrowedRequested = await db.borrow_book.findAll({include: [db.student]});
-  
-      const updatedBorrow = borrowbooked.map((item) => ({
-        ...item,
-        bookdetail: item.bookdetail.filter(({ status }) => status !== 'unavailable'),
-      }));
-  
-      for (const borrow of updatedBorrow) {
-        const borrowEntry = borrowedRequested.find(({ borrow_id }) => borrow_id === borrow.borrowid);
-  
-        const bookLength = borrowEntry.Books.length;
-         
-        borrowEntry.status = borrow.bookdetail.length === bookLength ? 'Returned' : (borrow.bookdetail.length > 0 ? `Returned ${borrow.bookdetail.length}` : null);
-        borrowEntry.return_date = borrow.bookdetail.length === bookLength ? new Date() : null;
-        
-        for (const book of borrow.bookdetail) {
-          for (const borrowedBook of borrowEntry.Books) {
-            if (borrowedBook.id === book.id) {
-              borrowedBook.status = 'available';
-              borrowedBook.return_date = new Date()
-              borrowedBook.return_status = 'Returned'
-              await db.book.update({ status: 'available' }, { where: { id: book.id } });
-            }
-          }
-        }
-        await deleteObject(`qrcode/${borrow.borrowid}`);
-        await db.borrow_book.update({
-            status: borrowEntry.status,
-            return_date: borrowEntry.return_date,
-            Books: borrowEntry.Books , 
-            qrcode: ''
-        } , {where : {borrow_id: borrowEntry.borrow_id}})
-        
 
-      }
-      
-      
-      return res.status(200).json(borrowedRequested);
+    try {
+        const borrowedRequested = await db.borrow_book.findAll({ include: [db.student] });
+
+        const updatedBorrow = borrowbooked.map((item) => ({
+            ...item,
+            bookdetail: item.bookdetail.filter(({ status }) => status !== 'unavailable'),
+        }));
+
+        for (const borrow of updatedBorrow) {
+            const borrowEntry = borrowedRequested.find(({ borrow_id }) => borrow_id === borrow.borrowid);
+            if (!borrowEntry) continue; // Skip iteration if no matching borrow entry found
+
+            const bookLength = borrowEntry.Books.length;
+            borrowEntry.status = borrow.bookdetail.length === bookLength ? 'Returned' : (borrow.bookdetail.length > 0 ? `Returned ${borrow.bookdetail.length}` : null);
+            borrowEntry.return_date = borrow.bookdetail.length === bookLength ? new Date() : null;
+
+            for (const book of borrow.bookdetail) {
+                const borrowedBook = borrowEntry.Books.find(borrowedBook => borrowedBook.id === book.id);
+                if (borrowedBook) {
+                    borrowedBook.status = 'available';
+                    borrowedBook.return_date = new Date();
+                    borrowedBook.return_status = 'Returned';
+                    await db.book.update({ status: 'available', return_date: new Date() }, { where: { id: book.id } });
+                }
+            }
+            await deleteObject(`qrcode/${borrow.borrowid}`);
+            await db.borrow_book.update({
+                status: borrowEntry.status,
+                return_date: borrowEntry.return_date,
+                qrcode: ''
+            }, { where: { borrow_id: borrowEntry.borrow_id } });
+        }
+
+        return res.status(200).json(borrowedRequested);
     } catch (error) {
-      
-      return res.status(500).json({ message: 'Error Occurred' });
+        console.error('Error processing return:', error);
+        return res.status(500).json({ message: 'Error Occurred' });
     }
-  };
+};
   
   
 
