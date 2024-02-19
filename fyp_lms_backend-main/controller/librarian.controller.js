@@ -343,75 +343,46 @@ export const editlibrarian = async (req, res) => {
         const { id, oldpwd, newpwd, fullname, ID } = req.body;
         const librarian = await db.librarian.findOne({ where: { id: id } });
 
-        if (librarian) {
-            if (newpwd !== '' && fullname === '' && ID === '') {
-                // Update librarian password
-                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
-                if (isMatch) {
-                    const salt = await bcrypt.genSalt(10);
-                    const hashedpwd = await bcrypt.hash(newpwd, salt);
-                    await db.librarian.update({ password: hashedpwd }, { where: { id: id } });
-                    return res.sendStatus(200);
-                }
-            } else if (fullname !== '' && newpwd === '' && ID === '') {
-                // Update librarian fullname
-                await db.librarian.update({ fullname: fullname }, { where: { id: id } });
-                return res.sendStatus(200);
-            } else if (fullname !== '' && newpwd !== '' && ID !== '') {
-                // Update librarian password, fullname, and cardID
-                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
-                if (isMatch) {
-                    const salt = await bcrypt.genSalt(10);
-                    const hashedpwd = await bcrypt.hash(newpwd, salt);
-                    await db.librarian.update(
-                        { password: hashedpwd, fullname: fullname, cardID: ID },
-                        { where: { id: id } }
-                    );
-                    return res.sendStatus(200);
-                }
-            } else if (fullname === '' && newpwd === '' && ID !== '') {
-                // Update librarian cardID
-                await db.librarian.update({ cardID: ID }, { where: { id: id } });
-                return res.sendStatus(200);
-            } else if (fullname !== '' && ID !== '' && newpwd === '') {
-                // Update librarian fullname and cardID
-                await db.librarian.update({ fullname: fullname, cardID: ID }, { where: { id: id } });
-                return res.sendStatus(200);
-            } else if (fullname !== '' && ID === '' && newpwd !== '') {
-                // Update librarian password and fullname
-                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
-                if (isMatch) {
-                    const salt = await bcrypt.genSalt(10);
-                    const hashedpwd = await bcrypt.hash(newpwd, salt);
-                    await db.librarian.update(
-                        { password: hashedpwd, fullname: fullname },
-                        { where: { id: id } }
-                    );
-                    return res.sendStatus(200);
-                }
-            } else if (fullname === '' && ID !== '' && newpwd !== '') {
-                // Update librarian password and cardID
-                const isMatch = await bcrypt.compare(oldpwd, librarian.password);
-                if (isMatch) {
-                    const salt = await bcrypt.genSalt(10);
-                    const hashedpwd = await bcrypt.hash(newpwd, salt);
-                    await db.librarian.update(
-                        { password: hashedpwd, cardID: ID },
-                        { where: { id: id } }
-                    );
-                    return res.sendStatus(200);
-                }
-            } else {
-                return res.sendStatus(400);
-            }
-        } else {
+        if (!librarian) {
             return res.sendStatus(500);
+        }
+
+        let updatePayload = {};
+        let passwordUpdateNeeded = newpwd !== '' && oldpwd;
+
+        if (passwordUpdateNeeded) {
+            const isMatch = await bcrypt.compare(oldpwd, librarian.password);
+            if (!isMatch) {
+                // If password doesn't match, return unauthorized or bad request
+                return res.sendStatus(401); // Or 400 if you prefer
+            }
+            const salt = await bcrypt.genSalt(10);
+            const hashedpwd = await bcrypt.hash(newpwd, salt);
+            updatePayload.password = hashedpwd;
+        }
+
+        if (fullname !== '') {
+            updatePayload.fullname = fullname;
+        }
+
+        if (ID !== '') {
+            updatePayload.cardID = ID;
+        }
+
+        // If there's something to update, proceed
+        if (Object.keys(updatePayload).length > 0) {
+            await db.librarian.update(updatePayload, { where: { id: id } });
+            return res.sendStatus(200);
+        } else {
+            // Nothing to update
+            return res.sendStatus(400);
         }
     } catch (error) {
         console.error('Error editing librarian:', error);
         return res.sendStatus(500);
     }
 };
+
 export const register_HD = async (req, res) => {
     const { firstname, lastname, ID, department, phone_number, email } = req.body;
     const roles = await db.role.findAll();
@@ -622,6 +593,7 @@ export const pickupandreturnbook = async (req, res) => {
                     borrow_date: new Date(),
                     expect_return_date: nextWeek,
                     qrcode: ''
+
                 },
                 {
                     where: {
@@ -653,13 +625,12 @@ export const pickupandreturnbook = async (req, res) => {
             });
 
             if (response.length > 0) {
+                
                 await Promise.all(
                     response.map(async (data) => {
-                        const status = data.expect_return_date < date ? `returned ${lateday(date, data.expect_return_date)} days late` : 'returned';
-
                         await db.borrow_book.update(
                             {
-                                status: status,
+                                status: data.expect_return_date < date ? `returned ${lateday(date, data.expect_return_date)} days late` : 'returned',
                                 return_date: new Date(),
                                 qrcode: ''
                             },
@@ -669,11 +640,11 @@ export const pickupandreturnbook = async (req, res) => {
                         );
 
                         await Promise.all(
-                            data.Books.map(async (book) => {
+                            data.Books.map(async (i) => {
                                 await db.book.update(
                                     { status: 'available' },
                                     {
-                                        where: { title: book.title }
+                                        where: { title: i.title }
                                     }
                                 );
                             })
